@@ -46,8 +46,14 @@ def fab_trainer(cfg, target):
 
     target_samples = target.sample(jax.random.PRNGKey(0), (cfg.eval_samples,))
     eval_fn, logger = get_eval_fn(cfg, target, target_samples)
-
-    for iteration in range(config.n_iteration):
+    key, subkey = jax.random.split(key)
+    logger = eval_fn(*config.eval_and_plot_fn(state, subkey))  # initialise logger
+    logger["stats/step"] = [0]
+    logger["stats/wallclock"] = [0]
+    logger["stats/nfe"] = [0]
+    if cfg.use_wandb:
+        wandb.log(extract_last_entry(logger))
+    for iteration in range(1, config.n_iteration):
         iter_time = time()
 
         key, subkey = jax.random.split(key)

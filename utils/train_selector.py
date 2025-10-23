@@ -71,5 +71,8 @@ def get_train_fn(alg_name):
         from algorithms.gbs.gbs_trainer import gbs_trainer
         return gbs_trainer
 
+    elif alg_name == 'simple_flow':
+        from algorithms.simple_flow.flow_trainer import flow_trainer
+        return gbs_trainer
     else:
         raise ValueError(f'No algorithm named {alg_name}.')

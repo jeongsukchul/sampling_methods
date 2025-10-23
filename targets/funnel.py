@@ -64,7 +64,9 @@ class Funnel(Target):
         plt.contourf(x, y, pdf_values, levels=20, cmap='viridis')
         if samples is not None:
             idx = jax.random.choice(jax.random.PRNGKey(0), samples.shape[0], (300,))
-            ax.scatter(samples[idx, 0], samples[idx, 1], c='r', alpha=0.5, marker='x')
+            sample_x = jnp.clip(samples[idx, 0],-10,5)
+            sample_y = jnp.clip(samples[idx, 1],-5,5)
+            ax.scatter(sample_x, sample_y, c='r', alpha=0.5, marker='x')
         # plt.xlabel('X')
         # plt.ylabel('Y')
         plt.xticks([])

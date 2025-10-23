@@ -1,6 +1,6 @@
 # Wandb
 wandb:
-  entity: # Your identity here
+  entity: tjrcjf410-seoul-national-university # Your identity here
   project: sampling_bench
   resume: allow
   mode: run

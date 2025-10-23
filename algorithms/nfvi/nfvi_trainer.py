@@ -6,7 +6,7 @@ Code builds on https://github.com/google-deepmind/annealed_flow_transport
 import jax.numpy as jnp
 
 from algorithms.common import flows
-from algorithms.common.utils import get_optimizer
+from algorithms.fab.utils.optimize import OptimizerConfig, get_optimizer
 import distrax
 import haiku as hk
 import jax
@@ -45,8 +45,10 @@ def nfvi_trainer(cfg, target):
     key, subkey = jax.random.split(key)
     flow_init_params = flow_forward_fn.init(subkey,
                                             samples)
+    opt_cfg = dict(alg_cfg.training.optimizer)
+    optimizer_config = OptimizerConfig(**opt_cfg)
 
-    opt = get_optimizer(alg_cfg.step_size, None)
+    opt, lr = get_optimizer(optimizer_config)
     opt_init_state = opt.init(flow_init_params)
     nfvi.outer_loop_vi(initial_sampler=initial_sampler,
                        opt_update=opt.update,
@@ -57,4 +59,4 @@ def nfvi_trainer(cfg, target):
                        initial_log_density=log_density_initial,
                        target=target,
                        cfg=cfg,
-                       save_checkpoint=None)
+                       )

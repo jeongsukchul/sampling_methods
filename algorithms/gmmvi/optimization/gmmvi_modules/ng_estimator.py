@@ -71,6 +71,8 @@ def setup_stein_ng_estimator(gmm_wrapper: GMMWrapper, DIM, DIAGONAL_COVS,
         weights = jnp.exp(log_weights)
         importance_weights = weights / jnp.sum(weights, axis=0, keepdims=True)
         weighted_gradients = jnp.expand_dims(importance_weights, 1) * log_ratio_grads
+        print("component_log d", component_log_densities)
+        print("back ground", background_mixture_densities)
         if DIAGONAL_COVS:
             prec_times_diff = jnp.expand_dims(1 / (chol_cov ** 2), 1) * jnp.transpose(samples - mean)
             expected_hessian = jnp.sum(jnp.transpose(prec_times_diff) * weighted_gradients, 0)
@@ -106,7 +108,6 @@ def setup_stein_ng_estimator(gmm_wrapper: GMMWrapper, DIM, DIAGONAL_COVS,
         component_log_densities = jnp.transpose(component_log_densities)
         log_ratios = target_lnpdfs - model_densities
         log_ratio_grads = target_lnpdfs_grads - model_densities_grad
-
         def _get_hessian_and_grad_per_comp(i, samples, relative_mapping, component_log_densities,
                                            log_ratios, log_ratio_grads, background_densities):
             my_samples, my_log_ratios, my_log_ratios_grad, my_background_densities, my_component_log_densities = \
@@ -133,48 +134,48 @@ def setup_more_ng_estimator(gmm_wrapper: GMMWrapper, quad_regression: QuadRegres
         return NgEstimatorState(MORE_quad_reg_state=quad_reg_state)
 
     def get_expected_hessian_and_grad(gmm_wrapper_state: GMMWrapperState,
+                                      ng_estimator_state: NgEstimatorState,
                                       samples: chex.Array, mapping: chex.Array,
                                       background_densities: chex.Array, target_lnpdfs: chex.Array,
+                                      target_lnpdf_grads, num_components
                                       ) -> [chex.Array, chex.Array]:
+        means = gmm_wrapper_state.gmm_state.means
+        num_components = jnp.shape(means)[0]
+        D = jnp.shape(means)[1]
 
-        num_components = jnp.shape(gmm_wrapper_state.gmm_state.means)[0]
-
-        expected_hessian_neg = jnp.empty((0,), dtype=jnp.float32)
-        expected_gradient_neg = jnp.empty((0,), dtype=jnp.float32)
-        relative_mapping = mapping - jnp.max(mapping) + num_components - 1
-
-        model_densities, component_log_densities = gmm_wrapper.log_densities_also_individual(samples)
+        model_densities, component_log_densities = jax.vmap(Partial(gmm_wrapper.log_densities_also_individual, gmm_wrapper_state.gmm_state))(samples)
+        component_log_densities = jnp.transpose(component_log_densities)
 
         log_ratios = target_lnpdfs - model_densities
         log_ratio_grads = jnp.zeros(jnp.shape(samples[0]))
-
-        for i in jnp.arange(num_components):
-            my_samples, my_rewards, _, my_background_densities, my_component_log_densities = \
-                _get_rewards_for_comp(i, samples, relative_mapping, component_log_densities,
-                                      log_ratios, log_ratio_grads, background_densities)
-
-            log_weights = my_component_log_densities - my_background_densities
+        idx = jnp.arange(num_components, dtype=jnp.int32)
+        def per_component(i):
+            # Importance weights
+            log_w = component_log_densities[i] - background_densities  # (Si,)
             if USE_SELF_NORMALIZED_IMPORTANCE_WEIGHTS:
-                log_weights -= jax.nn.logsumexp(log_weights, axis=0, keepdims=True)
-                weights = jnp.exp(log_weights)
-                my_importance_weights = weights / jnp.sum(weights, axis=0, keepdims=True)
+                log_w = log_w - jax.nn.logsumexp(log_w, axis=0, keepdims=True)
+                w = jnp.exp(log_w)
+                w = w / jnp.sum(w, keepdims=True)                     # (Si,)
             else:
-                my_importance_weights = jnp.exp(log_weights)
-            reward_quad, reward_lin, const_term = quad_regression.fit_quadratic(gmm_wrapper_state.l2_regularizers[i],
-                                                                                jnp.shape(my_samples)[0],
-                                                                                my_samples, my_rewards,
-                                                                                my_importance_weights,
-                                                                                gmm_wrapper_state.gmm_state.means[i],
-                                                                                gmm_wrapper_state.gmm_state.chol_covs[i])
+                w = jnp.exp(log_w)
 
-            this_G_hat = reward_quad
-            expected_hessian_neg = expected_hessian_neg.write(i, this_G_hat)
-            this_g_hat = jnp.reshape(reward_quad @ jnp.expand_dims(gmm_wrapper_state.gmm_state.means[i], axis=1)
-                                     - jnp.expand_dims(reward_lin, axis=1), [DIM])
-            expected_gradient_neg = expected_gradient_neg.write(i, this_g_hat)
-        expected_hessian_neg = expected_hessian_neg.stack()
-        expected_gradient_neg = expected_gradient_neg.stack()
-        return expected_hessian_neg, expected_gradient_neg
+            # Fit quadratic reward around current component mean/cov
+            G_hat, g_hat_lin, const_term = quad_regression.fit_quadratic(
+                ng_estimator_state.MORE_quad_reg_state,
+                gmm_wrapper_state.l2_regularizers[i],
+                samples.shape[0],
+                samples, log_ratios, w,
+                means[i],                                  # center
+                gmm_wrapper_state.gmm_state.chol_covs[i],  # local scale
+            )  # G_hat: (D,D), g_hat_lin: (D,)
+
+            # gradient in canonical form: G mu - g
+            g_vec = (G_hat @ means[i][:, None] - g_hat_lin[:, None]).reshape((D,))
+            return G_hat, g_vec
+
+        # Vectorize over components
+        Gs, gs = jax.vmap(per_component)(idx)  # Gs: (K,D,D), gs: (K,D)
+        return Gs, gs
 
     return NgEstimator(init_ng_estimator_state=init_more_ng_estimator_state,
                        get_expected_hessian_and_grad=get_expected_hessian_and_grad)

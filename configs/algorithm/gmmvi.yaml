@@ -1,7 +1,7 @@
 # Gaussian Mixture Model Variational Inference (GMMVI)
 name: gmmvi
 gmmvi_config: ConfigDict()
-algorithm: 'SAQTRUX'
+algorithm: 'ZAMTRUX'
 iters: 3000
 use_sample_database: False
 max_database_size: 1e6

@@ -95,7 +95,7 @@ def ais_inner_transition(point: Point, log_w: chex.Array, trans_op_state: chex.A
     # Remove invalid samples.
     valid_samples = jax.vmap(point_is_valid_fn)(new_point)
     info.update(n_valid_samples=jnp.sum(valid_samples))
-    new_point = jax.tree_map(lambda a, b: broadcasted_where(valid_samples, a, b), new_point, point)
+    new_point = jax.tree_util.tree_map(lambda a, b: broadcasted_where(valid_samples, a, b), new_point, point)
 
     log_w_increment = log_weight_contribution_point(new_point, ais_step_index, betas, alpha)
     chex.assert_equal_shape((log_w_increment, log_w))
@@ -113,10 +113,10 @@ def replace_invalid_samples_with_valid_ones(
     valid_samples = jax.vmap(point_is_valid_fn)(point)
     p = jnp.where(valid_samples, jnp.ones_like(valid_samples), jnp.zeros_like(valid_samples))
     indices = jax.random.choice(key, jnp.arange(valid_samples.shape[0]), p=p, shape=valid_samples.shape)
-    alt_points = jax.tree_map(lambda x: x[indices], point)
+    alt_points = jax.tree_util.tree_map(lambda x: x[indices], point)
 
     # Replace invalid samples with valid samples
-    point = jax.tree_map(lambda a, b: broadcasted_where(valid_samples, a, b), point, alt_points)
+    point = jax.tree_util.tree_map(lambda a, b: broadcasted_where(valid_samples, a, b), point, alt_points)
     return point
 
 
@@ -196,7 +196,7 @@ def build_smc(
         point0 = jax.vmap(
             partial(create_point, log_q_fn=log_q_fn, log_p_fn=log_p_fn, with_grad=transition_operator.uses_grad)
         )(x0)
-
+        
         # Sometimes the flow produces nan samples - remove these.
         key, subkey = jax.random.split(smc_state.key)
         point0 = replace_invalid_samples_with_valid_ones(
@@ -240,7 +240,7 @@ def build_smc(
         if not verbose:
             for i in range(n_intermediate_distributions):
                 info.update(
-                    {f"dist{i + 1}_" + key: value for key, value in jax.tree_map(lambda x: x[i], infos).items()})
+                    {f"dist{i + 1}_" + key: value for key, value in jax.tree_util.tree_map(lambda x: x[i], infos).items()})
         log_ess_q_p = log_effective_sample_size(point0.log_p - point0.log_q)
         log_ess_ais = log_effective_sample_size(log_w)
         info.update(log_ess_q_p=log_ess_q_p, log_ess_smc_final=log_ess_ais,
@@ -320,7 +320,7 @@ def build_smc(
         if not verbose:
             for i in range(n_intermediate_distributions):
                 info.update(
-                    {f"dist{i + 1}_" + key: value for key, value in jax.tree_map(lambda x: x[i], infos).items()})
+                    {f"dist{i + 1}_" + key: value for key, value in jax.tree_util.tree_map(lambda x: x[i], infos).items()})
         log_ess_q_p = log_effective_sample_size(point0.log_p - point0.log_q)
         log_ess_ais = log_effective_sample_size(log_w)
         info.update(log_ess_q_p=log_ess_q_p, log_ess_smc_final=log_ess_ais,

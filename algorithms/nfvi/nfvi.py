@@ -102,7 +102,7 @@ def outer_loop_vi(initial_sampler: InitialSampler,
         new_free_energy, flow_grads = free_energy_and_grad(curr_flow_params,
                                                            subkey)
         updates, new_opt_state = opt_update(flow_grads,
-                                            curr_opt_state)
+                                            curr_opt_state, curr_flow_params)
         new_flow_params = optax.apply_updates(curr_flow_params,
                                               updates)
         return curr_key, new_flow_params, new_free_energy, new_opt_state
@@ -132,5 +132,13 @@ def outer_loop_vi(initial_sampler: InitialSampler,
                 print_results(step, logger, cfg)
 
                 if cfg.use_wandb:
-                    wandb.log(logger)
+                    wandb.log(extract_last_entry(logger))
 
+def extract_last_entry(dictionary):
+    last_entries = {}
+    for key, value in dictionary.items():
+        try:
+            last_entries[key] = value[-min(len(value), 1)]
+        except:
+            pass
+    return last_entries

@@ -86,6 +86,7 @@ class StudentTMixtureModel(Target):
             ax.contourf(x, y, pdf_values, levels=50)
 
             if samples is not None:
+                samples = jnp.clip(samples, boarder[0], boarder[1])
                 plt.scatter(samples[:300, 0], samples[:300, 1], c='r', alpha=0.5, marker='x')
 
             # plt.xlabel('X')
@@ -95,7 +96,7 @@ class StudentTMixtureModel(Target):
             wb = {"figures/vis": [wandb.Image(fig)]}
             if show:
                 plt.show()
-
+            plt.close(fig)
             return wb
 
         else:

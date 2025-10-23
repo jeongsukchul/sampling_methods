@@ -5,10 +5,22 @@ batch_size: ${target.all.batch_size}
 step_size: ${target.nfvi.step_size}
 
 num_stack: 6
-flow_type: 'ComposedFlows'
+# flow_type: 'RealNVPFlow'
 
 init_mean: 0.
 init_std: ${target.nfvi.initial_scale}
-
+training:
+  optimizer:
+    init_lr: ${target.fab.step_size}
+    use_schedule: False
+    optimizer_name: "adam"
+    peak_lr: 2e-4
+    end_lr: 0
+    max_global_norm: "null"
+    max_param_grad: "null"
+    dynamic_grad_ignore_and_clip: True
+    dynamic_grad_ignore_factor: 10.  # When to fully ignore gradient.
+    dynamic_grad_norm_factor: 2.  # When to clip gradient norm.
+    dynamic_grad_norm_window: 100  # Window to track median gradient norm over.
 defaults:
-  - flows/diagonal_affine
+  - flows/neural_spline

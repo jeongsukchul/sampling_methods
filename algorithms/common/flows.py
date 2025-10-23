@@ -1057,3 +1057,181 @@ def chain_flow_with_coupling(first_flow_cfg: ConfigDict, repetitions: int) -> Co
     # coupling_config.type = "ConvAffineCouplingStack" # Todo specify flow here
 
     return chain_flows(first_flow_cfg, coupling_config, repetitions)
+# ---------- RealNVP (Haiku) compatible with ConfigurableFlow ------------------
+import haiku as hk
+import jax
+import jax.numpy as jnp
+from typing import Tuple, List
+
+Array = jnp.ndarray
+
+# Invertible linear layer: PLU parameterization, acts on a single (D,) vector.
+class _InvertiblePLU(hk.Module):
+    def __init__(self, features: int, name: str | None = None):
+        super().__init__(name=name)
+        self.features = features
+
+    def __call__(self, x: Array, reverse: bool = False) -> Tuple[Array, Array]:
+        # x: (D,)
+        d = self.features
+        if x.shape != (d,):
+            raise ValueError(f"_InvertiblePLU expected shape ({d},) got {x.shape}")
+
+        def _init_plu(shape, dtype):
+            # Build an orthogonal matrix, then PLU-factorize:  W0 = P @ L @ U
+            W0 = hk.initializers.Orthogonal()((d, d), dtype)
+            P, L, U = jax.scipy.linalg.lu(W0)
+            s = jnp.diag(U)
+            U = U - jnp.diag(s)  # strictly upper-triangular
+            # Pack as a single parameter for simplicity
+            return jnp.concatenate([P.reshape(-1), L.reshape(-1), U.reshape(-1), s], axis=0)
+
+        flat = hk.get_parameter(
+            "PLU_flat",
+            shape=(d*d + d*d + d*d + d,),
+            dtype=jnp.float32,
+            init=_init_plu,
+        )
+        o = 0
+        P  = flat[o:o+d*d].reshape(d, d); o += d*d
+        Lf = flat[o:o+d*d].reshape(d, d); o += d*d
+        Uf = flat[o:o+d*d].reshape(d, d); o += d*d
+        s  = flat[o:o+d]
+
+        # Constrain to valid L, U
+        L = jnp.tril(Lf, k=-1) + jnp.eye(d, dtype=Lf.dtype)
+        U = jnp.triu(Uf, k=1)
+        S = jnp.diag(s)
+        W = P @ L @ (U + S)
+
+        logdet = jnp.sum(jnp.log(jnp.abs(s)))  # scalar
+
+        if not reverse:
+            z = x @ W              # (D,)
+            return z, logdet
+        else:
+            # Solve row-vector right systems without materializing inverses:
+            # x W^{-1} = ((x (U+S)^{-1}) L^{-1}) P^{-1}
+            US = U + S
+
+            def right_solve_upper(A, b):   # b: (D,)
+                # Solve b @ A = y  via transpose: (A^T @ b^T = y^T)
+                yt = jax.scipy.linalg.solve_triangular(A.T, b[:, None], lower=True)
+                return yt[:, 0]
+
+            def right_solve_lower(A, b, unit_diagonal=False):
+                yt = jax.scipy.linalg.solve_triangular(
+                    A.T, b[:, None], lower=False, unit_diagonal=unit_diagonal
+                )
+                return yt[:, 0]
+
+            z = right_solve_upper(US, x)
+            z = right_solve_lower(L,  z, unit_diagonal=True)
+            Pinv = jnp.linalg.inv(P)       # permutation ⇒ Pinv == P^T, but keep general
+            z = z @ Pinv
+            return z, -logdet
+
+
+class _TinyMLP(hk.Module):
+    """Per-sample MLP: (D/2,) -> (D/2,), zero last layer (near-identity flow)."""
+    def __init__(self, out_dim: int, hidden: int, name: str | None = None):
+        super().__init__(name=name)
+        self.out_dim = out_dim
+        self.hidden = hidden
+        # No submodules created here; Haiku creates them on call.
+
+    def __call__(self, x: Array) -> Array:
+        if x.ndim != 1:
+            raise ValueError(f"_TinyMLP expects (d,), got {x.shape}")
+        h = hk.Linear(self.hidden)(x); h = jax.nn.leaky_relu(h)
+        h = hk.LayerNorm(axis=-1, create_scale=True, create_offset=True)(h)
+        h = hk.Linear(self.hidden)(h); h = jax.nn.leaky_relu(h)
+        h = hk.LayerNorm(axis=-1, create_scale=True, create_offset=True)(h)
+        h = hk.Linear(self.out_dim, w_init=jnp.zeros, b_init=jnp.zeros)(h)
+        return h
+
+
+class _MetaBlock(hk.Module):
+    """One RealNVP coupling block with an invertible PLU pre-mix (single-sample)."""
+    def __init__(self, in_dim: int, hidden: int, idx: int, name: str | None = None):
+        super().__init__(name=name)
+        self.in_dim = in_dim
+        self.hidden = hidden
+        self.idx = idx
+        if in_dim % 2 != 0:
+            raise ValueError(f"RealNVP requires even dim, got {in_dim}")
+        d2 = in_dim // 2
+        # Create submodules ONCE here; they’ll be “initialized” at first call under hk.transform
+        self.plu = _InvertiblePLU(in_dim, name="plu")
+        self.s_net = _TinyMLP(out_dim=d2, hidden=hidden, name="s_net")
+        self.t_net = _TinyMLP(out_dim=d2, hidden=hidden, name="t_net")
+
+    def __call__(self, x: Array, reverse: bool = False) -> Tuple[Array, Array]:
+        return self._reverse(x) if reverse else self._forward(x)
+
+    def _forward(self, x: Array) -> Tuple[Array, Array]:
+        # premix with linear PLU
+        z, logdet_lin = self.plu(x, reverse=False)   # z: (D,), logdet_lin: scalar
+        d2 = self.in_dim // 2
+        z1, z2 = z[:d2], z[d2:]
+        s = self.s_net(z1)                           # (D/2,)
+        t = self.t_net(z1)                           # (D/2,)
+        y2 = (z2 - t) * jnp.exp(-s)
+        y  = jnp.concatenate([z1, y2], axis=0)
+        logdet = logdet_lin - jnp.sum(s)            # scalar
+        return y, logdet
+
+    def _reverse(self, y: Array) -> Tuple[Array, Array]:
+        d2 = self.in_dim // 2
+        y1, y2 = y[:d2], y[d2:]
+        s = self.s_net(y1)
+        t = self.t_net(y1)
+        z2 = y2 * jnp.exp(s) + t
+        z  = jnp.concatenate([y1, z2], axis=0)
+        x, logdet_lin = self.plu(z, reverse=True)
+        logdet = logdet_lin + jnp.sum(s)            # scalar
+        return x, logdet
+
+
+class RealNVPFlow(ConfigurableFlow):
+    """
+    Config fields required:
+      - sample_shape: (D,)  (D must be even)
+      - num_blocks: int
+      - channels:   int   (hidden width for s/t MLPs)
+    """
+    def __init__(self, config):
+        super().__init__(config)
+        self._dim = int(config.sample_shape[0])
+        self._num_blocks = int(config.num_blocks)
+        self._channels   = int(config.channels)
+        if self._dim % 2 != 0:
+            raise ValueError(f"RealNVPFlow requires even dim, got {self._dim}")
+        # Create blocks once; parameters will be created on first transformed call
+        self._blocks: List[_MetaBlock] = [
+            _MetaBlock(self._dim, self._channels, idx=i, name=f"block_{i}")
+            for i in range(self._num_blocks)
+        ]
+
+    def _check_configuration(self, config):
+        self._check_members_types(config, [
+            ('num_blocks', int),
+            ('channels', int),
+        ])
+
+    # Single-sample transform; ConfigurableFlow will vmapi it over batch.
+    def transform_and_log_abs_det_jac(self, x: Array) -> Tuple[Array, Array]:
+        z = x
+        total_ld = 0.0
+        for blk in self._blocks:
+            z, ld = blk(z, reverse=False)
+            total_ld = total_ld + ld
+        return z, total_ld  # (D,), scalar
+
+    def inv_transform_and_log_abs_det_jac(self, y: Array) -> Tuple[Array, Array]:
+        x = y
+        total_ld = 0.0
+        for blk in reversed(self._blocks):
+            x, ld = blk(x, reverse=True)
+            total_ld = total_ld + ld
+        return x, total_ld  # (D,), scalar

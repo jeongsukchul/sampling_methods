@@ -8,7 +8,7 @@ smc:
   use_resampling: False
   n_intermediate_distributions: 12
   spacing_type: "linear"
-  transition_operator: "hmc"  # [hmc or metropolis]
+  transition_operator: "metropolis"  # [hmc or metropolis]
   point_is_valid_fn_type: "default"   # [default, in_bounds] - use in_bounds if we want to restrict SMC to the below bounds.
 
   hmc:
@@ -48,7 +48,7 @@ training:
   optimizer:
     init_lr: ${target.fab.step_size}
     optimizer_name: "adam"
-    use_schedule: False
+    use_schedule: True
     peak_lr: 2e-4
     end_lr: 0
     warmup_n_epoch: 10

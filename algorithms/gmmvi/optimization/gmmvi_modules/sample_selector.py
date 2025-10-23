@@ -96,6 +96,7 @@ def setup_vips_sample_selector(sample_db: SampleDB, gmm_wrapper: GMMWrapper, tar
         num_additional_samples = jnp.maximum(1, DESIRED_SAMPLES_PER_COMPONENT - num_effective_samples)
         new_samples, mapping = gmm_wrapper.sample_from_components_no_shuffle(gmm_wrapper_state.gmm_state,
                                                                              num_additional_samples,
+                                                                             int(gmm_wrapper_state.gmm_state.num_components),
                                                                              seed)
         new_target_grads, new_target_lnpdfs = get_target_grads(new_samples)
         return new_samples, new_target_lnpdfs, new_target_grads, mapping

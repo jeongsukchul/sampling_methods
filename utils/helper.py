@@ -24,34 +24,69 @@ def flatten_dict(d, parent_key='', sep='_'):
             items.append((new_key, v))
     return dict(items)
 
+def reset_device_memory(delete_live_buffers: bool = True) -> int:
+    """Best-effort device memory reset for modern JAX.
 
-def reset_device_memory(delete_objs=True):
-    """Free all tracked DeviceArray memory and delete objects.
-  Args:
-    delete_objs: bool: whether to delete all live DeviceValues or just free.
-  Returns:
-    number of DeviceArrays that were manually freed.
-  """
-    dvals = (x for x in gc.get_objects() if isinstance(x, jax.xla.DeviceValue))
+    Returns:
+      int: number of backend live buffers/arrays explicitly deleted (best-effort).
+    """
     n_deleted = 0
-    for dv in dvals:
-        if not isinstance(dv, jax.xla.DeviceConstant):
-            try:
-                dv._check_if_deleted()  # pylint: disable=protected-access
-                dv.delete()
-                n_deleted += 1
-            except ValueError:
-                pass
-        if delete_objs:
-            del dv
-    del dvals
+
+    # 1) Drop Python references to jax.Array objects and collect.
+    #    (We don't rely on private types like DeviceArray/DeviceValue anymore.)
+    try:
+        for obj in gc.get_objects():
+            # jax.Array is the public runtime type in modern JAX
+            if isinstance(obj, jax.Array):
+                # Ensure pending transfers/compute finish (avoids racing with deletion)
+                try:
+                    obj.block_until_ready()
+                except Exception:
+                    pass
+                # Let GC reclaim host refs; device buffers go when last ref is gone
+                # (can't del 'obj' here meaningfully; just hint GC)
+        # A couple of collect passes helps in practice
+        gc.collect()
+        gc.collect()
+    except Exception:
+        # If gc.get_objects() is restricted (PyPy, etc.), just proceed
+        pass
+
+    # 2) Clear JAX caches that may pin executables / device allocations.
+    try:
+        jax.clear_caches()
+    except Exception:
+        pass
+
+    # 3) Best-effort explicit deletion of backend live buffers/arrays (private-ish).
+    if delete_live_buffers:
+        try:
+            backend = jax.lib.xla_bridge.get_backend()
+        except Exception:
+            backend = None
+
+        if backend is not None:
+            # Older paths: live_buffers(); some PJRT builds: live_arrays()
+            deleted_here = 0
+            for attr in ("live_buffers", "live_arrays"):
+                try:
+                    live = getattr(backend, attr)()
+                except Exception:
+                    continue
+                # Materialize list in case the iterator is view-like
+                for buf in list(live):
+                    try:
+                        buf.delete()   # PJRT Buffer/Array has delete()
+                        deleted_here += 1
+                    except Exception:
+                        pass
+                if deleted_here:
+                    n_deleted += deleted_here
+                    break  # no need to try the other attribute
+
+    # One more GC pass after backend deletes
     gc.collect()
-
-    backend = jax.lib.xla_bridge.get_backend()
-    for buf in backend.live_buffers(): buf.delete()
     return n_deleted
-
-
 def stable_mean(x):
     # Create a mask where `True` indicates non-NaN values
     nan_check = ~jnp.isnan(x)

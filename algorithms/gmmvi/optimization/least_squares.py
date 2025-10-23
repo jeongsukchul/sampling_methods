@@ -38,7 +38,7 @@ def setup_quad_regression(DIM):
 
                 # quad features
                 quad_features = jnp.zeros((num_samples, 0))
-                for i in range(quad_reg_state.dim):
+                for i in range(DIM):
                     quad_features = jnp.concatenate((quad_features, jnp.expand_dims(x[:, i], axis=1) * x[:, i:]),
                                                     axis=1)
 
@@ -61,7 +61,7 @@ def setup_quad_regression(DIM):
             #
             if quad_reg_state.bias_entry is not None:
                 bias_index = jnp.arange(len(reg_mat))[quad_reg_state.bias_entry]
-                reg_mat[[bias_index, bias_index]] = [0]
+                reg_mat = reg_mat.at[bias_index, bias_index].set(0)
             params = jnp.squeeze(jnp.linalg.solve(weighted_features @ features + reg_mat,
                                                   weighted_features @ jnp.expand_dims(outputs, 1)))
             return params
@@ -80,7 +80,7 @@ def setup_quad_regression(DIM):
         params = _fit(quad_reg_state, regularizer, num_samples, inputs, outputs, weights)
 
         qt = jnp.zeros((DIM, DIM))
-        qt[quad_reg_state.triu_idx_const[:, 0], quad_reg_state.triu_idx_const[:, 1]] = params[- (DIM + 1)]
+        qt = qt.at[quad_reg_state.triu_idx_const[:, 0], quad_reg_state.triu_idx_const[:, 1]].set(params[- (DIM + 1)])
         # qt = tf.scatter_nd(quad_reg_state.triu_idx_const, params[:- (quad_reg_state.dim + 1)], [quad_reg_state.dim, quad_reg_state.dim])
 
         quad_term = - qt - jnp.transpose(qt)

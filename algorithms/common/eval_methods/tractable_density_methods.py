@@ -59,7 +59,6 @@ def get_eval_fn(cfg, target, target_samples):
         for d in cfg.discrepancies:
             logger[f'discrepancies/{d}'].append(getattr(discrepancies, f'compute_{d}')(target_samples, samples,
                                                                                        cfg) if target_samples is not None else jnp.inf)
-
         if cfg.moving_average.use_ma:
             logger.update(moving_averages(logger, window_size=cfg.moving_average.window_size))
 

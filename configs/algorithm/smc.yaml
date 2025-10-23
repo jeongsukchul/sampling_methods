@@ -9,4 +9,4 @@ init_mean: 0.
 init_std: ${target.smc.initial_scale}
 
 defaults:
-  - mcmc/hmc
+  - mcmc/mh

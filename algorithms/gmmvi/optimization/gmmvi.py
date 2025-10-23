@@ -19,6 +19,7 @@ from algorithms.gmmvi.optimization.gmmvi_modules.weight_stepsize_adaptation impo
 from algorithms.gmmvi.optimization.gmmvi_modules.weight_updater import (
     setup_trust_region_based_weight_updater, setup_direct_weight_updater)
 from algorithms.gmmvi.optimization.sample_db import SampleDBState, setup_sampledb
+from algorithms.gmmvi.optimization.least_squares import setup_quad_regression
 import jax
 import jax.numpy as jnp
 from typing import NamedTuple, Callable
@@ -89,16 +90,16 @@ def setup_gmmvi(config, target, seed):
                                                 config['ng_estimator_config']["use_self_normalized_importance_weights"],
                                                 )
         ng_estimator_state = ng_estimator.init_ng_estimator_state()
-    # elif config["ng_estimator_type"] == "MORE":
-    #     quad_regression = setup_quad_regression(dim)
-    #     quad_regression_state = quad_regression.init_quad_reg_state()
-    #
-    #     ng_estimator = setup_more_ng_estimator(model,
-    #                                            quad_regression,
-    #                                            dim,
-    #                                            config['ng_estimator_config']["only_use_own_samples"],
-    #                                            config['ng_estimator_config']["use_self_normalized_importance_weights"])
-    #     ng_estimator_state = ng_estimator.init_ng_estimator_state(quad_regression_state)
+    elif config["ng_estimator_type"] == "MORE":
+        quad_regression = setup_quad_regression(dim)
+        quad_regression_state = quad_regression.init_quad_reg_state()
+    
+        ng_estimator = setup_more_ng_estimator(model,
+                                               quad_regression,
+                                               dim,
+                                               config['ng_estimator_config']["only_use_own_samples"],
+                                               config['ng_estimator_config']["use_self_normalized_importance_weights"])
+        ng_estimator_state = ng_estimator.init_ng_estimator_state(quad_regression_state)
     else:
         raise ValueError(f"config['ng_estimator_type'] is '{config['ng_estimator_type']}' "
                          f"which is an unknown type")
@@ -226,6 +227,7 @@ def setup_gmmvi(config, target, seed):
         new_component_stepsizes = component_stepsize_adapter.update_stepsize(train_state.model_state)
         new_model_state = model.update_stepsizes(train_state.model_state, new_component_stepsizes)
         expected_hessian_neg, expected_grad_neg = ng_estimator.get_expected_hessian_and_grad(new_model_state,
+                                                                                             train_state.ng_estimator_state,
                                                                                              samples,
                                                                                              mapping,
                                                                                              sample_dist_densities,

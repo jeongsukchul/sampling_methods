@@ -20,7 +20,6 @@ class GMMWrapperState(NamedTuple):
 class GMMWrapper(NamedTuple):
     init_gmm_wrapper_state: Callable
     add_component: Callable
-    add_component: Callable
     remove_component: Callable
     replace_components: Callable
     store_rewards: Callable

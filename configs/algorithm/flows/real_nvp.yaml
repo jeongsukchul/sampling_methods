@@ -1,0 +1,4 @@
+# Neural Spline Flow
+flow_type: 'RealNVPFlow'
+num_blocks: 6
+channels: 256
